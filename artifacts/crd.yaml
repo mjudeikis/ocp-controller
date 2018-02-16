@@ -1,0 +1,26 @@
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  name: tags.deployments.origin.io
+spec:
+  group: deployments.origin.io
+  version: v1alpha1
+  names:
+    kind: Tag
+    plural: tags
+  scope: Namespaced
+  validation:
+    openAPIV3Schema:
+      properties:
+        spec:
+          properties:
+            imageTag:
+              type: string
+              enum:
+                – “v1.0.0”
+                – “v1.0.1”
+            deploymentConfigName:
+              type: string
+            imageTag:
+              type: string
+
