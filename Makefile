@@ -3,7 +3,7 @@ VERSION := $(shell date +%Y%m%d%H%M)
 IMAGE := mangirdas/$(CONTROLLER_NAME)
 REGISTRY := docker.io
 
-.PHONY: install_deps build build-image
+.PHONY: install_deps build build-image publish-image
 
 install_deps:
 	glide install
@@ -21,3 +21,6 @@ build-image: bin/linux/$(CONTROLLER_NAME)
 
 publish-image:
 	docker push $(REGISTRY)/mangirdas/$(CONTROLLER_NAME)
+
+update-codegen:
+	./hack/update-codegen.sh

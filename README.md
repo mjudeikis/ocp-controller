@@ -1,26 +1,42 @@
-# Namespace Rolebinding Operator
+# Openshift Controller with CRD
 
-This repository contains an example of a Kubernetes operator that
-listens for changes on namespaces and creates a rolebinding with
-cluster edit access within that namespace. This example would be
-useful for when using OIDC in a Kubernetes cluster.
-
-For example: You might have a group in your AD with the name:
-`ad-kubernetes-kube-system` when the `kube-system` namespace is created,
-this operator would create the required RoleBinding so that when a user
-with the group `ad-kubernetes-kube-system` logs in via OIDC they'll have
-access to edit things in the `kube-system` namespace
+ToDo: Write sumup for how to use it
 
 ## Usage
-`--run-outside-cluster # Uses ~/.kube/config rather than in cluster configuration`
+`--kubeconfig ~/.kube/config  # Uses ~/.kube/config rather than in cluster configuration`
+
+Start in debug mode:
+```
+/data/go/src/github.com/mjudeikis/ocp-controller/bin/ocp-controller --kubeconfig ~/openshift.local.config/master/admin.kubeconfig -v 4 -stderrthreshold=info
+```
+
+
 
 ## Development
 
 ### Build from source
 1. `make install_deps`
 2. `make build`
-3. `./bin/namespace-rolebinding-operator --run-outside-cluster 1`
+3. `./bin/ocp-controller --kubeconfig ~/.kube/config `
 
-To get CRD controller scripts
 
-cp -r vendor/github.com/openshift/client-go/hack ./
+### Regenerate CRD package client
+```
+make update-codegen
+```
+
+### ToDo:
+
+1. Create CRD definition for Image version with name of DC's (list)
+2. Create watcher for CRD and patch DC on CRD data.
+3. Split to separate API object for all controllers.
+4. Move DC controller to same logic as k8s upstream
+
+
+### Crete CRD:
+
+`oc create -f artifacts/crd.yaml`
+
+### Create instance of our CRD:
+
+`/data/go/src/github.com/mjudeikis/ocp-controller/artifacts/exmple-foo.yaml`

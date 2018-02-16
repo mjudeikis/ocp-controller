@@ -12,8 +12,8 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/mjudeikis/ocp-controller/pkg/controller"
-	samplecontrollerclientset "github.com/mjudeikis/ocp-controller/pkg/samplecontroller/clientset/versioned"
-	informers "github.com/mjudeikis/ocp-controller/pkg/samplecontroller/informers/externalversions"
+	samplecontrollerclientset "github.com/mjudeikis/ocp-controller/pkg/deploymentscontroller/clientset/versioned"
+	informers "github.com/mjudeikis/ocp-controller/pkg/deploymentscontroller/informers/externalversions"
 	imagev1 "github.com/openshift/client-go/image/clientset/versioned/typed/image/v1"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
