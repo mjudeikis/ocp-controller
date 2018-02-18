@@ -33,6 +33,12 @@ make update-codegen
 4. Move DC controller to same logic as k8s upstream
 
 
+### Flow:
+
+`CRD is updated with new TAG`
+`Update trigger for DC with new tag`
+
+
 ### Crete CRD:
 
 `oc create -f artifacts/crd.yaml`
@@ -40,3 +46,13 @@ make update-codegen
 ### Create instance of our CRD:
 
 `/data/go/src/github.com/mjudeikis/ocp-controller/artifacts/exmple-foo.yaml`
+
+
+We create new object tag, which we will patch via jenkins or other fancy ci/cd tool
+now we creat CRD for it and create example object
+show it via oc create -f example
+oc get tag to show it exist.
+
+to test:
+oc new-app httpd-example
+TODO: add new build info

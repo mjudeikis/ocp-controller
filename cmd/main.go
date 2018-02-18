@@ -4,18 +4,17 @@ import (
 	"flag"
 	"log"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"sync"
-	"syscall"
 	"time"
 
 	"github.com/golang/glog"
-	"github.com/mjudeikis/ocp-controller/pkg/controller"
-	samplecontrollerclientset "github.com/mjudeikis/ocp-controller/pkg/deploymentscontroller/clientset/versioned"
-	informers "github.com/mjudeikis/ocp-controller/pkg/deploymentscontroller/informers/externalversions"
-	imagev1 "github.com/openshift/client-go/image/clientset/versioned/typed/image/v1"
-	kubeinformers "k8s.io/client-go/informers"
+	controllers "github.com/mjudeikis/ocp-controller/pkg/controllers"
+	"github.com/mjudeikis/ocp-controller/pkg/signals"
+	tagcontrollerclientset "github.com/mjudeikis/ocp-controller/pkg/tagcontroller/clientset/versioned"
+	taginformers "github.com/mjudeikis/ocp-controller/pkg/tagcontroller/informers/externalversions"
+	apps "github.com/openshift/client-go/apps/clientset/versioned"
+	appsinformers "github.com/openshift/client-go/apps/informers/externalversions"
+
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -24,42 +23,29 @@ func main() {
 	// Set logging output to standard console out
 	log.SetOutput(os.Stdout)
 
-	sigs := make(chan os.Signal, 1) // Create channel to receive OS signals
-	stop := make(chan struct{})     // Create channel to receive stop signal
-
-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGINT) // Register the sigs channel to receieve SIGTERM
-
-	wg := &sync.WaitGroup{} // Goroutines can add themselves to this to be waited on so that they finish
+	stopCh := signals.SetupSignalHandler()
 
 	// Create clientset for interacting with the kubernetes cluster
-	kclient, imageClient, crdClient, err := newClientSet()
+	originClient, kubeClient, tagClient, err := newClientSet()
 
 	if err != nil {
 		panic(err.Error())
 	}
 
-	go controller.NewDeploymentController(kclient, imageClient).Run(stop, wg)
+	appsInformerFactory := appsinformers.NewSharedInformerFactory(originClient, time.Second*30)
+	tagInformerFactory := taginformers.NewSharedInformerFactory(tagClient, time.Second*30)
 
-	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kclient, time.Second*30)
-	exampleInformerFactory := informers.NewSharedInformerFactory(crdClient, time.Second*30)
+	controller := controllers.NewController(originClient, kubeClient, tagClient, appsInformerFactory, tagInformerFactory)
 
-	controller := controller.NewController(kclient, crdClient, kubeInformerFactory, exampleInformerFactory)
+	go appsInformerFactory.Start(stopCh)
+	go tagInformerFactory.Start(stopCh)
 
-	go kubeInformerFactory.Start(stop)
-	go exampleInformerFactory.Start(stop)
-
-	if err = controller.Run(2, stop); err != nil {
+	if err = controller.Run(2, stopCh); err != nil {
 		glog.Fatalf("Error running controller: %s", err.Error())
 	}
-
-	<-sigs // Wait for signals (this hangs until a signal arrives)
-	log.Printf("Shutting down...")
-
-	close(stop) // Tell goroutines to stop themselves
-	wg.Wait()   // Wait for all to be stopped
 }
 
-func newClientSet() (*kubernetes.Clientset, *imagev1.ImageV1Client, *samplecontrollerclientset.Clientset, error) {
+func newClientSet() (*apps.Clientset, *kubernetes.Clientset, *tagcontrollerclientset.Clientset, error) {
 
 	// use the current context in kubeconfig
 	//config, err := templateclientsetclientcmd.BuildConfigFromFlags("", kubeConfigLocation)
@@ -77,22 +63,22 @@ func newClientSet() (*kubernetes.Clientset, *imagev1.ImageV1Client, *samplecontr
 		return nil, nil, nil, err
 	}
 
-	imageClient, err := imagev1.NewForConfig(config)
+	tagClient, err := tagcontrollerclientset.NewForConfig(config)
+	if err != nil {
+		glog.Fatalf("Error building tag clientset: %s", err.Error())
+	}
+
+	originClient, err := apps.NewForConfig(config)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	samplecontrollerClient, err := samplecontrollerclientset.NewForConfig(config)
-	if err != nil {
-		glog.Fatalf("Error building example clientset: %s", err.Error())
-	}
-
-	kClient, err := kubernetes.NewForConfig(config)
+	kubeClient, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	return kClient, imageClient, samplecontrollerClient, nil
+	return originClient, kubeClient, tagClient, nil
 }
 
 func homeDir() string {

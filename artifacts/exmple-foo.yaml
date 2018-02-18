@@ -1,7 +1,8 @@
 apiVersion: deployments.origin.io/v1alpha1
-kind: Foo
+kind: Tag
 metadata:
-  name: example-foo
+  name: httpd-example
 spec:
-  deploymentName: example-foo
-  replicas: 1
+   deploymentConfigName: httpd-example
+   containerName: test
+   imageTag: dev

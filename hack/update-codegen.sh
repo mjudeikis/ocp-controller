@@ -9,7 +9,7 @@ CODEGEN_PKG=${CODEGEN_PKG:-$(cd ${SCRIPT_ROOT}; ls -d -1 ./vendor/k8s.io/code-ge
 
 verify="${VERIFY:-}"
 
-for group in deploymentscontroller; do
+for group in tagcontroller; do
   ${CODEGEN_PKG}/generate-groups.sh "deepcopy,client,lister,informer" \
     github.com/mjudeikis/ocp-controller/pkg/${group} \
     github.com/mjudeikis/ocp-controller/pkg/apis \
