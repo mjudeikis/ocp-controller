@@ -1,5 +1,5 @@
 FROM golang:1.9
 
-COPY ./bin/deploymentconfig-operator /
+COPY ./bin/tagcontroller /
 
-ENTRYPOINT /deploymentconfig-operator
+CMD ["/tagcontroller", "-v=4", "-stderrthreshold=info"]

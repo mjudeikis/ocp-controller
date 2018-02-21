@@ -1,58 +1,78 @@
-# Openshift Controller with CRD
+# Openshift Controller with CRD Example
 
-ToDo: Write sumup for how to use it
+This repository shows how we can use [CRD](https://kubernetes.io/docs/concepts/api-extension/custom-resources/), [operators](https://coreos.com/operators/) and [controllers](https://github.com/kubernetes/community/blob/master/contributors/devel/controllers.md) design patterns.
 
-## Usage
-`--kubeconfig ~/.kube/config  # Uses ~/.kube/config rather than in cluster configuration`
+In this repository we create new CRD with name `Tag`. This resource referes `DeploymentConfig` name, container name, and image tag. Without `Controller` pattern this resource is usless. We monitor this CRD object using [dynamicaly generated](https://github.com/kubernetes/code-generator) client. This allows us to take actions based on resource changes. In this example we patch `DeploymentConfig` to deploy image tag from object `Tag`.  This is trivial example, just to show possible functionality and capabilities of this pattern.
 
-Start in debug mode:
+## Usage Flags
+`--kubeconfig ~/.kube/config ` -  Uses ~/.kube/config rather than in cluster configuration
+
+`-v 4 -stderrthreshold=info` - Logging level  
+
+### Flow:
+
+1. CRD resource is created
+2. New `Tag` resource is created, pointing to exising or non existing `DeploymentConfig`
+3. `DeploymentConfig` is annotated to tell controller that it can be `owned` by `Tag` resource.
 ```
-/data/go/src/github.com/mjudeikis/ocp-controller/bin/ocp-controller --kubeconfig ~/openshift.local.config/master/admin.kubeconfig -v 4 -stderrthreshold=info
+oc annotate dc httpd-example deployments.origin.io/tags=True
 ```
-
-
+4. If `Tag` resource `Spec` data is matched with `DeploymentConfig` data DC is patched. When resource is patched, ownership metadata is updated:
+```
+ownerReferences:
+    - apiVersion: deployments.origin.io/v1alpha1
+      blockOwnerDeletion: true
+      controller: true
+      kind: Tag
+      name: httpd-example
+      uid: aa3e3830-1634-11e8-8eb2-52540008e27c
+```
+5. If any of the resource is being Updated/Deleted/Created - Controller will check if it needs to do anything with resource state.
 
 ## Development
 
 ### Build from source
 1. `make install_deps`
 2. `make build`
-3. `./bin/ocp-controller --kubeconfig ~/.kube/config `
-
+3. `./bin/tagcontroller --kubeconfig ~/.kube/config `
 
 ### Regenerate CRD package client
 ```
 make update-codegen
 ```
 
-### ToDo:
+### Dev notes:
 
-1. Create CRD definition for Image version with name of DC's (list)
-2. Create watcher for CRD and patch DC on CRD data.
-3. Split to separate API object for all controllers.
-4. Move DC controller to same logic as k8s upstream
+Start controller outside cluster:
+```
+/data/go/src/github.com/mjudeikis/ocp-controller/bin/tagcontroller --kubeconfig ~/openshift.local.config/master/admin.kubeconfig -v 4 -stderrthreshold=info
+```
 
+Start controlller in the cluster:
+```
+oc create -f /data/go/src/github.com/mjudeikis/ocp-controller/artifacts/controller.yaml 
+```
 
-### Flow:
+Create example applications:
+```
+oc process template/httpd-example -n openshift -p NAME=httpd-example-two| oc create -f -
+oc process template/httpd-example -n openshift -p NAME=httpd-example| oc create -f -
+```
 
-`CRD is updated with new TAG`
-`Update trigger for DC with new tag`
+Annotate DeploymentConfigs to ne "tracked":
+```
+oc annotate dc httpd-example deployments.origin.io/tags=True
+oc annotate dc httpd-example-two deployments.origin.io/tags=True
+```
 
+Create CRD resource:
+```
+oc create -f /data/go/src/github.com/mjudeikis/ocp-controller/artifacts/crd.yaml 
+```
 
-### Crete CRD:
-
-`oc create -f artifacts/crd.yaml`
-
-### Create instance of our CRD:
-
-`/data/go/src/github.com/mjudeikis/ocp-controller/artifacts/exmple-foo.yaml`
-
-
-We create new object tag, which we will patch via jenkins or other fancy ci/cd tool
-now we creat CRD for it and create example object
-show it via oc create -f example
-oc get tag to show it exist.
-
-to test:
-oc new-app httpd-example
-TODO: add new build info
+Create Tag resources:
+```
+oc create -f /data/go/src/github.com/mjudeikis/ocp-controller/artifacts/exmple-tag-one.yaml
+oc create -f /data/go/src/github.com/mjudeikis/ocp-controller/artifacts/exmple-tag-two.yaml
+```
+oc adm policy add-cluster-role-to-user tag-operator system:serviceaccount:kube-system:tag-operator

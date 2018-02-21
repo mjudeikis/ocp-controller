@@ -4,7 +4,6 @@ import (
 	"flag"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/golang/glog"
@@ -16,6 +15,7 @@ import (
 	appsinformers "github.com/openshift/client-go/apps/informers/externalversions"
 
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -29,6 +29,7 @@ func main() {
 	originClient, kubeClient, tagClient, err := newClientSet()
 
 	if err != nil {
+		glog.Fatalf("Error running controller: %s", err.Error())
 		panic(err.Error())
 	}
 
@@ -47,33 +48,34 @@ func main() {
 
 func newClientSet() (*apps.Clientset, *kubernetes.Clientset, *tagcontrollerclientset.Clientset, error) {
 
-	// use the current context in kubeconfig
-	//config, err := templateclientsetclientcmd.BuildConfigFromFlags("", kubeConfigLocation)
-
-	var kubeconfig *string
-	if home := homeDir(); home != "" {
-		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
-	} else {
-		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
-	}
+	kubeconfig := flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+	var restconfig *rest.Config
+	var err error
 	flag.Parse()
 
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	if err != nil {
-		return nil, nil, nil, err
+	if len(*kubeconfig) > 0 {
+		restconfig, err = clientcmd.BuildConfigFromFlags("", *kubeconfig)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	} else {
+		restconfig, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, nil, nil, err
+		}
 	}
 
-	tagClient, err := tagcontrollerclientset.NewForConfig(config)
+	tagClient, err := tagcontrollerclientset.NewForConfig(restconfig)
 	if err != nil {
 		glog.Fatalf("Error building tag clientset: %s", err.Error())
 	}
 
-	originClient, err := apps.NewForConfig(config)
+	originClient, err := apps.NewForConfig(restconfig)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	kubeClient, err := kubernetes.NewForConfig(config)
+	kubeClient, err := kubernetes.NewForConfig(restconfig)
 	if err != nil {
 		return nil, nil, nil, err
 	}

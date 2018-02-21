@@ -1,8 +1,0 @@
-apiVersion: deployments.origin.io/v1alpha1
-kind: Tag
-metadata:
-  name: httpd-example
-spec:
-   deploymentConfigName: httpd-example
-   containerName: test
-   imageTag: dev

@@ -1,0 +1,68 @@
+---
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: tag-controller
+  namespace: kube-system
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: tag-controller
+rules:
+  - apiGroups: 
+      - ""
+      - extensions
+      - apps.openshift.io
+      - deployments.origin.io
+    resources:
+      - namespaces
+      - deploymets
+      - deploymentconfigs
+      - tags
+      - tags/finalizers
+      - events
+    verbs: 
+     - create
+     - delete
+     - deletecollection
+     - get
+     - list
+     - patch
+     - update
+     - watch
+
+---
+apiVersion: v1
+kind: ClusterRoleBinding
+metadata:
+  name: tag-controller
+roleRef:
+  name: admin
+subjects:
+- kind: ServiceAccount
+  name: tag-controller
+  namespace: kube-system
+userNames:
+- system:serviceaccount:kube-system:tag-controller
+
+---
+kind: Deployment
+apiVersion: extensions/v1beta1
+metadata:
+  name: tag-controller
+  namespace: kube-system
+  labels:
+    k8s-app: tag-controller
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        k8s-app: tag-controller
+    spec:
+      serviceAccountName: tag-controller
+      containers:
+      - image: docker.io/mangirdas/tagcontroller:latest
+        name: tag-controller

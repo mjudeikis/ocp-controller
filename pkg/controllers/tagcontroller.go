@@ -2,6 +2,7 @@ package tagcontroller
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/golang/glog"
@@ -17,6 +18,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -27,21 +30,32 @@ import (
 	"k8s.io/client-go/util/workqueue"
 )
 
-const controllerAgentName = "tag-controller"
+const controllerAgentName = "tags-controller"
 
 const (
-	// SuccessSynced is used as part of the Event 'reason' when a Foo is synced
+	// SuccessSynced is used as part of the Event 'reason' when a Tag is synced
 	SuccessSynced = "Synced"
+	// ErrResourcePatchFailed is used as part of the Event 'reason' when a Tag fails
+	// to sync due unknown reason
+	ErrResourcePatchFailed = "ErrResourcePatchFailed"
+
 	// ErrResourceExists is used as part of the Event 'reason' when a Foo fails
 	// to sync due to a Deployment of the same name already existing.
 	ErrResourceExists = "ErrResourceExists"
 
 	// MessageResourceExists is the message used for Events when a resource
 	// fails to sync due to a Deployment already existing
-	MessageResourceExists = "Resource %q already exists and is not managed by Tag Controller"
+	MessageResourceExists = "Resource %q already exists and is not managed by Tag"
+
+	// MessageResourcePatchFailed is the message used for Events when a resource
+	// fails to sync due some unknown reasons
+	MessageResourcePatchFailed = "Resource %q patch failed with error %v"
 	// MessageResourceSynced is the message used for an Event fired when a Foo
 	// is synced successfully
 	MessageResourceSynced = "Tags synced successfully"
+
+	//Tag ownership annotation
+	TagOwnershipAnnotation = "deployments.origin.io/tags"
 )
 
 // Controller is the controller implementation for Foo resources
@@ -70,7 +84,7 @@ type Controller struct {
 	recorder record.EventRecorder
 }
 
-// NewController returns a new sample controller
+// NewController returns a controller
 func NewController(
 	originClientset apps.Interface,
 	kubeClientset kubernetes.Interface,
@@ -78,14 +92,14 @@ func NewController(
 	originInformerFactory appsinformers.SharedInformerFactory,
 	tagInformerFactory taginformers.SharedInformerFactory) *Controller {
 
-	// obtain references to shared index informers for the Deployment and Foo
+	// obtain references to shared index informers for the DeploymentConfig and Tag
 	// types.
 	deploymentInformer := originInformerFactory.Apps().V1().DeploymentConfigs()
 	tagInformer := tagInformerFactory.Deployments().V1alpha1().Tags()
 
 	// Create event broadcaster
-	// Add sample-controller types to the default Kubernetes Scheme so Events can be
-	// logged for sample-controller types.
+	// Add tag-controller types to the default Kubernetes Scheme so Events can be
+	// logged for tag-controller types.
 	tagscheme.AddToScheme(scheme.Scheme)
 	glog.V(4).Info("Creating event broadcaster")
 	eventBroadcaster := record.NewBroadcaster()
@@ -106,7 +120,7 @@ func NewController(
 	}
 
 	glog.Info("Setting up event handlers")
-	// Set up an event handler for when Foo resources change
+	// Set up an event handler for when Tag resources change
 	tagInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: controller.enqueueTag,
 		UpdateFunc: func(old, new interface{}) {
@@ -114,10 +128,10 @@ func NewController(
 		},
 	})
 	// Set up an event handler for when Deployment resources change. This
-	// handler will lookup the owner of the given Deployment, and if it is
-	// owned by a Foo resource will enqueue that Foo resource for
-	// processing. This way, we don't need to implement custom logic for
-	// handling Deployment resources. More info on this pattern:
+	// handler will lookup DeploymentConfig and images they are using and if image
+	// is different than tag resource, it will patch it.
+	//  This way, we don't need to implement custom logic for
+	// handling DeploymentConfig resources for images. More info on this pattern:
 	// https://github.com/kubernetes/community/blob/8cafef897a22026d42f5e5bb3f104febe7e29830/contributors/devel/controllers.md
 	deploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: controller.handleObject,
@@ -209,7 +223,7 @@ func (c *Controller) processNextWorkItem() bool {
 			return nil
 		}
 		// Run the syncHandler, passing it the namespace/name string of the
-		// Foo resource to be synced.
+		// Tag resource to be synced.
 		if err := c.syncHandler(key); err != nil {
 			return fmt.Errorf("error syncing '%s': %s", key, err.Error())
 		}
@@ -229,8 +243,8 @@ func (c *Controller) processNextWorkItem() bool {
 }
 
 // syncHandler compares the actual state with the desired, and attempts to
-// converge the two. It then updates the Status block of the Foo resource
-// with the current status of the resource.
+// converge the two. It then updates the Status block of the Tag resource
+// with the current status (tag deployed) of the resource.
 func (c *Controller) syncHandler(key string) error {
 	// Convert the namespace/name string into a distinct namespace and name
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
@@ -242,10 +256,10 @@ func (c *Controller) syncHandler(key string) error {
 	// Get the Tag resource with this namespace/name
 	tag, err := c.tagsLister.Tags(namespace).Get(name)
 	if err != nil {
-		// The Foo resource may no longer exist, in which case we stop
+		// The Tag resource may no longer exist, in which case we stop
 		// processing.
 		if errors.IsNotFound(err) {
-			runtime.HandleError(fmt.Errorf("foo '%s' in work queue no longer exists", key))
+			runtime.HandleError(fmt.Errorf("tag object '%s' in work queue no longer exists", key))
 			return nil
 		}
 
@@ -253,35 +267,43 @@ func (c *Controller) syncHandler(key string) error {
 	}
 
 	deploymentName := tag.Spec.DeploymentConfigName
-	//deploymentImageName := tag.Spec.ContainerName
-	glog.V(4).Infof("deployment from tag object %v", deploymentName)
-	if deploymentName == "" {
+	glog.V(4).Infof("deploymentConfig %v is used by tag resource %v", deploymentName, name)
+	if deploymentName == "" || tag.Spec.ImageTag == "" || tag.Spec.ContainerName == "" {
 		// We choose to absorb the error here as the worker would requeue the
 		// resource otherwise. Instead, the next time the resource is updated
 		// the resource will be queued again.
 		runtime.HandleError(fmt.Errorf("%s: deployment name must be specified", key))
 		return nil
 	}
-	//TODO add more validation for other fields
 
 	// Get the deployment with the name specified in Foo.spec
 	deployment, err := c.appsLister.DeploymentConfigs(tag.Namespace).Get(deploymentName)
 	// If the resource doesn't exist, we'll create it
 	if errors.IsNotFound(err) {
 		runtime.HandleError(fmt.Errorf("%s: deployment does not exist. Nothing to track", key))
+		return nil
 	}
 
-	//get containers section from deploymentConfig
+	// If the DeploymentConfig is not controlled by this Tag resource, we should log
+	// a warning to the event recorder and retry
+	if ownerAnnotations := deployment.GetAnnotations(); len(ownerAnnotations[TagOwnershipAnnotation]) <= 0 {
+		glog.V(4).Infof("deploymentConfig %v is not owned by %v", deploymentName, name)
+		msg := fmt.Sprintf(MessageResourceExists, deployment.Name)
+		c.recorder.Event(tag, corev1.EventTypeWarning, ErrResourceExists, msg)
+		return fmt.Errorf(msg)
+	}
+
+	//get containers section from DeploymentConfig
 	containers := deployment.Spec.Template.Spec.Containers
 	imageTrigger := deployment.Spec.Triggers
-	newImage := tag.Spec.ContainerName + ":" + tag.Spec.ImageTag
+	newImage := fmt.Sprintf("%s:%s", tag.Spec.ContainerName, tag.Spec.ImageTag)
 	var containersKey, triggerKey interface{}
 
 	//get containers section key if match found
 	for key, item := range containers {
 		if item.Name == tag.Spec.ContainerName {
 			containersKey = key
-			glog.V(4).Infof("deployment has container for image %v %v", containersKey, item.Name)
+			glog.V(4).Infof("DeploymentConfig has required image %v", item.Name)
 		}
 	}
 
@@ -292,24 +314,31 @@ func (c *Controller) syncHandler(key string) error {
 		for _, item2 := range item.ImageChangeParams.ContainerNames {
 			if item2 == tag.Spec.ContainerName {
 				triggerKey = key
-				glog.V(4).Infof("deployment has trigger for image %v %v", triggerKey, item2)
+				glog.V(4).Infof("DeploymentConfig has required trigger for image %v", item2)
 			}
 		}
 
 	}
-
 	if containersKey != nil && triggerKey != nil {
 		//todo add imagestreamtag check for trigger if we have it set
 		if deployment.Spec.Triggers[triggerKey.(int)].ImageChangeParams.From.Name != newImage {
-			glog.V(4).Infof("Patching deployment: %v to point to %v", deploymentName, tag.Spec.ImageTag)
-
+			glog.V(4).Infof("Patching DeploymentConfig: %v to point to %v", deploymentName, tag.Spec.ImageTag)
 			deployment.Spec.Template.Spec.Containers[containersKey.(int)].Image = " "
 			deployment.Spec.Triggers[triggerKey.(int)].ImageChangeParams.From.Name = tag.Spec.ContainerName + ":" + tag.Spec.ImageTag
+			//add owner ref so we know how owns this stuff :)
+			deployment.OwnerReferences = []metav1.OwnerReference{
+				*metav1.NewControllerRef(tag, schema.GroupVersionKind{
+					Group:   tagv1alpha1.SchemeGroupVersion.Group,
+					Version: tagv1alpha1.SchemeGroupVersion.Version,
+					Kind:    "Tag",
+				})}
 
 			deployment, err = c.originClientset.AppsV1().DeploymentConfigs(tag.Namespace).Update(deployment)
 			if err != nil {
-				runtime.HandleError(fmt.Errorf("%v: deployment pathc failed", deploymentName))
-				return err
+				runtime.HandleError(fmt.Errorf("%v: deployment patch failed with error %v", deploymentName, err.Error()))
+				msg := fmt.Sprintf(MessageResourcePatchFailed, deploymentName, err.Error())
+				c.recorder.Event(tag, corev1.EventTypeWarning, ErrResourcePatchFailed, msg)
+				return fmt.Errorf(msg)
 			}
 			err = c.updateTagStatus(tag, deployment)
 			if err != nil {
@@ -324,21 +353,6 @@ func (c *Controller) syncHandler(key string) error {
 		glog.V(4).Infof("Patching is not required: %v already point to %v", deploymentName, tag.Spec.ImageTag)
 	}
 
-	// If an error occurs during Get/Create, we'll requeue the item so we can
-	// attempt processing again later. This could have been caused by a
-	// temporary network failure, or any other transient reason.
-
-	// If the Deployment is not controlled by this Foo resource, we should log
-	// a warning to the event recorder and ret
-	//if !metav1.IsControlledBy(deployment, foo) {
-	//	msg := fmt.Sprintf(MessageResourceExists, deployment.Name)
-	//	c.recorder.Event(foo, corev1.EventTypeWarning, ErrResourceExists, msg)
-	//	return fmt.Errorf(msg)
-	//}
-
-	// If an error occurs during Update, we'll requeue the item so we can
-	// attempt processing again later. THis could have been caused by a
-	// temporary network failure, or any other transient reason.
 	return nil
 }
 
@@ -370,7 +384,7 @@ func (c *Controller) enqueueTag(obj interface{}) {
 }
 
 // handleObject will take any resource implementing metav1.Object and attempt
-// to find the Foo resource that 'owns' it. It does this by looking at the
+// to find the Tag resource that 'owns' it. It does this by looking at the
 // objects metadata.ownerReferences field for an appropriate OwnerReference.
 // It then enqueues that Foo resource to be processed. If the object does not
 // have an appropriate OwnerReference, it will simply be skipped.
@@ -391,20 +405,29 @@ func (c *Controller) handleObject(obj interface{}) {
 		glog.V(4).Infof("Recovered deleted object '%s' from tombstone", object.GetName())
 	}
 	glog.V(4).Infof("Processing object: %s", object.GetName())
-	if ownerRef := metav1.GetControllerOf(object); ownerRef != nil {
-		// If this object is not owned by a Foo, we should not do anything more
+	if ownerAnnotations := object.GetAnnotations(); ownerAnnotations[TagOwnershipAnnotation] != "" {
+		// If this object does not have annotation for ownership we should not do anything
 		// with it.
-		if ownerRef.Kind != "Foo" {
+		glog.V(4).Infof("Checking owner annotations for %v", object.GetName())
+		//if annotation is not set to true we dropthis DC
+		if s, err := strconv.ParseBool(ownerAnnotations[TagOwnershipAnnotation]); err == nil && !s {
+			glog.V(4).Infof("deployment %v annotation is not set to true", object.GetName())
 			return
 		}
 
-		foo, err := c.tagsLister.Tags(object.GetNamespace()).Get(ownerRef.Name)
+		tags, err := c.tagsLister.Tags(object.GetNamespace()).List(labels.Everything())
 		if err != nil {
-			glog.V(4).Infof("ignoring orphaned object '%s' of foo '%s'", object.GetSelfLink(), ownerRef.Name)
+			glog.V(4).Infof("ignoring orphaned object '%s' of tag '%s'", object.GetSelfLink(), object.GetName())
 			return
 		}
 
-		c.enqueueTag(foo)
+		for key, tag := range tags {
+			//we found tag which want to own this DC - Congradz
+			if tag.Spec.DeploymentConfigName == object.GetName() {
+				glog.V(4).Infof("enqueue tag %v for processing with %v deployment", tag.Name, object.GetName())
+				c.enqueueTag(tags[key])
+			}
+		}
 		return
 	}
 }
